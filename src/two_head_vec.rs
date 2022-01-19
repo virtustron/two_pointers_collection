@@ -1,3 +1,5 @@
+use std::ptr;
+
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicPtr;
 
@@ -8,14 +10,13 @@ struct TwoHeadVec<T> {
     head_read: AtomicPtr,                 // -> buf1
     head_write: Arc<Mutex<usize>>,        // -> buf2
 
-    buffer_read: *mut T,             
-    buffer_write: *mut T,             
+    buffer_1: *mut T,             
+    buffer_2: *mut T,             
     
-    capacity_read: usize,            
-    capacity_write: usize,    
+    capacity: CachePadded<AtomicUsize>,    
 
-    length_read: usize,            
-    length_write: usize,  
+    length_read: CachePadded<AtomicUsize>,            
+    length_write: CachePadded<AtomicUsize>,  
     
     // aproach 1 generation
     generation: CachePadded<AtomicUsize>,     // `CachePadded` - to avoid cache locality.  
@@ -30,30 +31,24 @@ impl<T> TwoHeadVec<T> {
     pub fn new(capacity: usize) -> TwoHeadVec<T> {
         assert!(capacity > 0, "capacity must be non-zero");
 
-        head_read = AtomicPtr::default();
-        head_write = Arc::new(Mutex::new(0));
+        capacity.store(capacity, Ordering::Relaxed);
 
-        let buffer_read = vec![0; capacity];
-        let buffer_read = buffer_read.into_boxed_slice();
-
-        let buffer_write = vec![0; capacity];
-        let buffer_write = buffer_write.into_boxed_slice();
-
-        capacity_read = capacity;
-        capacity_write = capacity;
-
-        length_read = 0;
-        length_write = 0;
+        length_read.store(0, Ordering::Relaxed);
+        let buffer_1 = vec![0; capacity].into_boxed_slice();
+        head_read = AtomicPtr::from(buffer_1);
+        
+        length_write.store(0, Ordering::Relaxed);
+        let buffer_2 = vec![0; capacity].into_boxed_slice();
+        head_write = Arc::new(Mutex::new(buffer_2));
 
         generation = 0;
 
         TwoHeadVec {
             head_read,
             head_write,
-            buffer_read,
-            buffer_write,
-            capacity_read,
-            capacity_write,
+            buffer_1,
+            buffer_2,
+            capacity,
             length_read,
             length_write,
             generation,
@@ -61,46 +56,29 @@ impl<T> TwoHeadVec<T> {
         }
     }
 
-    pub fn push(&self, index: usize, value: T) -> Result<(), T> {
+    pub fn push(&self, value: T) -> Result<(), T> {
+        assert!(length_write + 1 < capacity, "vector is already full");
 
-    /*
-    // approach 1
-
-    Mutex  head_write lock() {
-        
-        
-
-        2. swap `head_read` and `head_write` - atomic operation
-          2.1 store head_read   p = head_read.load()
-          2.2 head_read.store(head_write)                    // safe for get() due to atomic operation
-               generation += 1;  // use atomic increment function
-          2.3 head_write = p;
-
-        3. deep copy (content copying) `head_read` -> `head_write`
-    
-
-    }  
-    */
-        assert!(index >= 0, "index must be equal or greater than zero");
-        assert!(index < capacity_write, "index must be greater than zero");
-
-        // 1. modify `head_write`
         self.head_write.lock().unwrap();
-
-        length_write
         
-        let slot = unsafe { &*self.buffer_write.add(index) };         // shift pointer to `index`
+        // 1. modify `head_write`
+        length_write += 1;
+        let slot = unsafe { &*self.buffer_2.add(length_write - 1) };
+        unsafe { slot.value.get().write(MaybeUninit::new(value)); }
         
-        unsafe {
-            slot.value.get().write(MaybeUninit::new(value));
-        }
-
-
-
-        
-    }
-
-    
+        // 2. swap `head_read` and `head_write` and `capacity`, `length` respectively
+        let temp_head = head_read.load(Ordering::Acquire);        
+        head_read.store(self.head_write, Ordering::Release);     
+        generation.fetch_add(1, Ordering::SeqCst);
+        head_write = temp_head; 
+              
+        let temp_length = length_read.load(Ordering::Acquire);    
+        length_read.store(self.length_write, Ordering::Release);  
+        length_write = temp_length; 
+                
+        //3. deep copy (content copying) `head_read` -> `head_write`
+        ptr::copy(head_read, head_write, capacity.load(Ordering::Acquire));
+    }  
 
 }
 
