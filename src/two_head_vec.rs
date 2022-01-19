@@ -41,7 +41,7 @@ impl<T> TwoHeadVec<T> {
         let buffer_2 = vec![0; capacity].into_boxed_slice();
         head_write = Arc::new(Mutex::new(buffer_2));
 
-        generation = 0;
+        generation = 0;   // other approach - do count of the references to `head_read`
 
         TwoHeadVec {
             head_read,
@@ -80,31 +80,20 @@ impl<T> TwoHeadVec<T> {
         ptr::copy(head_read, head_write, capacity.load(Ordering::Acquire));
     }  
 
-}
+    pub fn get(&self, index: usize) -> Result<T, ()> {
+        // TODO let backoff = Backoff::new();
 
-/*
-get() {
-    /*
-    // approach 1
+        assert!(index > 0, "index must be greater than zero");
+        assert!(index < length_read.load(Ordering::Acquire), "index must be less than length");
 
-    loop {
-        let gen = generation 
+        loop {
+            let current_generation = generation.load(Ordering::SeqCst);
 
-        read from  `head_read`
+            let value = unsafe { &*self.head_read.load(Ordering::SeqCst).fetch_add(index) };
 
-        if gen == generation {
-            return readed from  `head_read`
+            if current_generation == generation.load(Ordering::SeqCst) {
+                return Some(value)
+            }
         }
     }
-    */
-
-
-    // aproach 2 - count references to `head_read`
 }
-
-  
-
-}
-
-*/
-
