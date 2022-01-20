@@ -4,8 +4,6 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicPtr;
 use std::marker::PhantomData;
 
-use core::mem::MaybeUninit;
-
 use core::sync::atomic::{self, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
@@ -61,34 +59,52 @@ impl<T> TwoHeadVec<T> {
     }
 
     pub fn push(&self, value: T) -> Result<(), T> {
-        assert!(self.length_write + 1 < self.capacity, "vector is already full");
+        let length_write = self.length_write.load(Ordering::Acquire);
+        let capacity = self.capacity.load(Ordering::Acquire);
+                
+        if length_write + 1 < capacity {
+            return Err(value);
+        }
 
-        self.head_write.lock().unwrap();
+        let mut mutexed_head_write; 
+
+        match self.head_write.lock() {
+            Ok(matched_head_write) => {
+                mutexed_head_write = matched_head_write;
+            }
+
+            Err(_) => {
+                return Err(value);
+            }
+        }
         
         // 1. modify `head_write`
-        self.length_write.fetch_add(1, Ordering::SeqCst);
-        let slot = unsafe { &*self.buffer_2.add(self.length_write - 1) };
-        unsafe { slot.value.get().write(MaybeUninit::new(value)); }
+        length_write += 1;
+        unsafe {
+            *mutexed_head_write.add(length_write - 1) = value;
+        };
+                       
         
         // 2. swap `head_read` and `head_write` and `capacity`, `length` respectively
         let temp_head = self.head_read.load(Ordering::Acquire);        
-        self.head_read.store(self.head_write, Ordering::Release);     
+        self.head_read.store(*mutexed_head_write, Ordering::Release);     
         self.generation.fetch_add(1, Ordering::SeqCst);
-        self.head_write = temp_head; 
+        *mutexed_head_write = temp_head; 
               
         let temp_length = self.length_read.load(Ordering::Acquire);    
-        self.length_read.store(self.length_write, Ordering::Release);  
-        self.length_write = temp_length; 
+        // TODO after copying lengthes must be equal
+        self.length_read.store(length_write, Ordering::Release);  
+        self.length_write = CachePadded::new(AtomicUsize::new(temp_length)); 
                 
         //3. deep copy (content copying) `head_read` -> `head_write`
-        ptr::copy(self.head_read, self.head_write, self.capacity.load(Ordering::Acquire));
+        // TODO check length
+        ptr::copy(self.head_read.into_inner(), self.head_write, self.capacity.load(Ordering::Acquire));
 
-        return self.length_write.load(Ordering::Acquire)
+        //return Ok(self.length_write.load(Ordering::Acquire))
+        return Ok();
     }  
 
     pub fn get(&self, index: usize) -> Result<T, ()> {
-        // TODO let backoff = Backoff::new();
-
         assert!(index > 0, "index must be greater than zero");
         assert!(index < self.length_read.load(Ordering::Acquire), "index must be less than length");
 
@@ -102,4 +118,12 @@ impl<T> TwoHeadVec<T> {
             }
         }
     }
+}
+
+
+// TODO write tests here
+
+// TODO conditional compilation tests module
+mod tests {
+
 }
