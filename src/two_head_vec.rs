@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicPtr;
 use std::marker::PhantomData;
 
-use core::sync::atomic::{self, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
@@ -59,7 +59,7 @@ impl<T> TwoHeadVec<T> {
     }
 
     pub fn push(&self, value: T) -> Result<(), T> {
-        let length_write = self.length_write.load(Ordering::Acquire);
+        let mut length_write = self.length_write.load(Ordering::Acquire);
         let capacity = self.capacity.load(Ordering::Acquire);
                 
         if length_write + 1 < capacity {
@@ -78,43 +78,56 @@ impl<T> TwoHeadVec<T> {
             }
         }
         
+
         // 1. modify `head_write`
         length_write += 1;
         unsafe {
             *mutexed_head_write.add(length_write - 1) = value;
         };
-                       
         
-        // 2. swap `head_read` and `head_write` and `capacity`, `length` respectively
+
+        // 2. swap: `head_read` <--> `head_write` and `length_read` <--> `length_write`
         let temp_head = self.head_read.load(Ordering::Acquire);        
         self.head_read.store(*mutexed_head_write, Ordering::Release);     
         self.generation.fetch_add(1, Ordering::SeqCst);
         *mutexed_head_write = temp_head; 
-              
-        let temp_length = self.length_read.load(Ordering::Acquire);    
-        // TODO after copying lengthes must be equal
-        self.length_read.store(length_write, Ordering::Release);  
-        self.length_write = CachePadded::new(AtomicUsize::new(temp_length)); 
-                
+            
+        
         //3. deep copy (content copying) `head_read` -> `head_write`
         // TODO check length
-        ptr::copy(self.head_read.into_inner(), self.head_write, self.capacity.load(Ordering::Acquire));
+        
+        unsafe {
+            let temp_head_read = self.head_read.load(Ordering::Acquire);
+            
+            ptr::copy(temp_head_read, *mutexed_head_write, self.capacity.load(Ordering::Acquire));
+        }
+
+        // after copying both lengths must be equal
+        self.length_read.store(length_write, Ordering::Release);  
 
         //return Ok(self.length_write.load(Ordering::Acquire))
-        return Ok();
+        return Ok(());
     }  
 
-    pub fn get(&self, index: usize) -> Result<T, ()> {
-        assert!(index > 0, "index must be greater than zero");
-        assert!(index < self.length_read.load(Ordering::Acquire), "index must be less than length");
+
+    pub fn get(&self, index: usize) -> Result<T, usize> {
+        if index > 0 {
+            return Err(index)
+        }
+
+        if index < self.length_read.load(Ordering::Acquire) {
+            return Err(index)
+        }
 
         loop {
             let current_generation = self.generation.load(Ordering::SeqCst);
 
-            let value = unsafe { &*self.head_read.load(Ordering::SeqCst).fetch_add(index) };
-
+            let pointer_to_value = unsafe { self.head_read.load(Ordering::SeqCst).add(index) };
+            
             if current_generation == self.generation.load(Ordering::SeqCst) {
-                return Some(value)
+                unsafe {
+                    return Ok(ptr::read(pointer_to_value))
+                }
             }
         }
     }
