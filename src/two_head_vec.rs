@@ -62,7 +62,7 @@ impl<T> TwoHeadVec<T> {
         let mut length_write = self.length_write.load(Ordering::Acquire);
         let capacity = self.capacity.load(Ordering::Acquire);
                 
-        if length_write + 1 < capacity {
+        if length_write + 1 > capacity {
             return Err(value);
         }
 
@@ -89,13 +89,13 @@ impl<T> TwoHeadVec<T> {
         // 2. swap: `head_read` <--> `head_write` and `length_read` <--> `length_write`
         let temp_head = self.head_read.load(Ordering::Acquire);        
         self.head_read.store(*mutexed_head_write, Ordering::Release);     
-        self.generation.fetch_add(1, Ordering::SeqCst);
         *mutexed_head_write = temp_head; 
+
+        self.generation.fetch_add(1, Ordering::SeqCst);
             
         
         //3. deep copy (content copying) `head_read` -> `head_write`
         // TODO check length
-        
         unsafe {
             let temp_head_read = self.head_read.load(Ordering::Acquire);
             
@@ -104,6 +104,7 @@ impl<T> TwoHeadVec<T> {
 
         // after copying both lengths must be equal
         self.length_read.store(length_write, Ordering::Release);  
+        self.length_write.store(length_write, Ordering::Release);  
 
         //return Ok(self.length_write.load(Ordering::Acquire))
         return Ok(());
@@ -111,14 +112,13 @@ impl<T> TwoHeadVec<T> {
 
 
     pub fn get(&self, index: usize) -> Result<T, usize> {
-        if index > 0 {
+        let current_length_read = self.length_read.load(Ordering::Acquire);
+        
+        if index > current_length_read - 1 {
             return Err(index)
         }
 
-        if index < self.length_read.load(Ordering::Acquire) {
-            return Err(index)
-        }
-
+        
         loop {
             let current_generation = self.generation.load(Ordering::SeqCst);
 
