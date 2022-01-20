@@ -14,5 +14,4 @@ fn main() {
     assert_eq!(v.get(1), Ok('b'));
 }
 
-#[cfg(test)]
-mod test;
+

@@ -86,7 +86,7 @@ impl<T> TwoHeadVec<T> {
         };
         
 
-        // 2. swap: `head_read` <--> `head_write` and `length_read` <--> `length_write`
+        // 2. swap: `head_read` <--> `head_write`
         let temp_head = self.head_read.load(Ordering::Acquire);        
         self.head_read.store(*mutexed_head_write, Ordering::Release);     
         *mutexed_head_write = temp_head; 
@@ -95,7 +95,6 @@ impl<T> TwoHeadVec<T> {
             
         
         //3. deep copy (content copying) `head_read` -> `head_write`
-        // TODO check length
         unsafe {
             let temp_head_read = self.head_read.load(Ordering::Acquire);
             
@@ -106,7 +105,6 @@ impl<T> TwoHeadVec<T> {
         self.length_read.store(length_write, Ordering::Release);  
         self.length_write.store(length_write, Ordering::Release);  
 
-        //return Ok(self.length_write.load(Ordering::Acquire))
         return Ok(());
     }  
 
@@ -134,9 +132,59 @@ impl<T> TwoHeadVec<T> {
 }
 
 
-// TODO write tests here
-
-// TODO conditional compilation tests module
+#[cfg(test)]
 mod tests {
+    use std::thread;
+    use std::sync::Arc;
 
+    use crate::two_head_vec::TwoHeadVec;
+
+
+    #[test]
+    fn push_two_elements_succesful() {
+        let v = TwoHeadVec::new(2);
+
+        assert_eq!(v.push('a'), Ok(()));
+        assert_eq!(v.push('b'), Ok(()));
+    }
+
+    #[test]
+    fn push_two_elements_multithread() {
+        const ELEMENTS_COUNT: usize = 10;
+        
+        let vector = Arc::new(TwoHeadVec::new(ELEMENTS_COUNT));
+
+        let mut handles = vec![];
+
+        for _ in 0..ELEMENTS_COUNT {
+            let temp_vector = vector.clone();
+
+            let handle = thread::spawn(move || {
+                assert_eq!(temp_vector.push('a'), Ok(()));
+            });
+
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+
+        let final_vector_result = Arc::try_unwrap(vector);
+    
+        match final_vector_result {
+            Ok(final_vector) => {
+                for i in 0..ELEMENTS_COUNT {
+                    assert_eq!(final_vector.get(i), Ok('a'));               
+                }
+            }
+
+            Err(final_vector) => {
+                for i in 0..ELEMENTS_COUNT {
+                    assert_eq!(final_vector.get(i), Ok('a'));               
+                }
+            }
+        }    
+    }
 }
