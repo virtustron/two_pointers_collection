@@ -1,3 +1,5 @@
+
+
 use std::ptr;
 
 use std::sync::{Arc, Mutex};
@@ -35,16 +37,14 @@ impl<T> TwoHeadVec<T> {
     pub fn new(capacity: usize) -> TwoHeadVec<T> {
         assert!(capacity > 0, "capacity must be non-zero");
 
-        //let boxed_buffer_1 = vec![0; capacity].into_boxed_slice();
         let temp_buffer_1: Vec<T> = Vec::with_capacity(capacity);
-        let boxed_buffer_1 = temp_buffer_1.into_boxed_slice();
-        let buffer_1 = Box::into_raw(boxed_buffer_1) as *mut T;
+        let (ptr, _len, _cap) = temp_buffer_1.into_raw_parts();
+        let buffer_1 = ptr as *mut T;
         let head_read = AtomicPtr::new(buffer_1);
         
-        //let boxed_buffer_2 = vec![0; capacity].into_boxed_slice();
         let temp_buffer_2: Vec<T> = Vec::with_capacity(capacity);
-        let boxed_buffer_2 = temp_buffer_2.into_boxed_slice();
-        let buffer_2 = Box::into_raw(boxed_buffer_2) as *mut T;
+        let (ptr, _len, _cap) = temp_buffer_2.into_raw_parts();
+        let buffer_2 = ptr as *mut T;
         let head_write = Arc::new(Mutex::new(buffer_2));
 
         let generation: usize = 0;   // other approach - do count of the references to `head_read`
